@@ -9,7 +9,7 @@
 
 #include "main.h"
 
-#include "ovpn.h"
+#include "io.h"
 #include "ovpnstruct.h"
 #include "netlink.h"
 #include "tcp.h"
@@ -30,9 +30,9 @@
 #include <net/ip_tunnels.h>
 
 /* Driver info */
-#define DRV_NAME	"ovpn-dco"
-#define DRV_VERSION	OVPN_DCO_VERSION
-#define DRV_DESCRIPTION	"OpenVPN data channel offload (ovpn-dco)"
+#define DRV_NAME	"ovpn"
+#define DRV_VERSION	OVPN_VERSION
+#define DRV_DESCRIPTION	"OpenVPN data channel offload (ovpn)"
 #define DRV_COPYRIGHT	"(C) 2020-2023 OpenVPN, Inc."
 
 static void ovpn_struct_free(struct net_device *net)
@@ -54,7 +54,7 @@ static int ovpn_net_open(struct net_device *dev)
 	struct in_device *dev_v4 = __in_dev_get_rtnl(dev);
 
 	if (dev_v4) {
-		/* disable redirects as Linux gets confused by ovpn-dco handling same-LAN routing */
+		/* disable redirects as Linux gets confused by ovpn handling same-LAN routing */
 		IN_DEV_CONF_SET(dev_v4, SEND_REDIRECTS, false);
 		IPV4_DEVCONF_ALL(dev_net(dev), SEND_REDIRECTS) = false;
 	}
