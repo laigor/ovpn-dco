@@ -60,7 +60,7 @@ int ovpn_struct_init(struct net_device *dev)
 
 	ovpn->dev = dev;
 
-	err = ovpn_netlink_init(ovpn);
+	err = ovpn_nl_init(ovpn);
 	if (err < 0)
 		return err;
 
@@ -94,7 +94,7 @@ int ovpn_struct_init(struct net_device *dev)
 /* Called after decrypt to write IP packet to tun netdev.
  * This method is expected to manage/free skb.
  */
-static void tun_netdev_write(struct ovpn_peer *peer, struct sk_buff *skb)
+static void ovpn_netdev_write(struct ovpn_peer *peer, struct sk_buff *skb)
 {
 	/* packet integrity was verified on the VPN layer - no need to perform
 	 * any additional check along the stack
@@ -141,7 +141,7 @@ int ovpn_napi_poll(struct napi_struct *napi, int budget)
 	 */
 	while ((work_done < budget) &&
 	       (skb = ptr_ring_consume_bh(&peer->netif_rx_ring))) {
-		tun_netdev_write(peer, skb);
+		ovpn_netdev_write(peer, skb);
 		work_done++;
 	}
 
@@ -309,7 +309,7 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 			netdev_warn(peer->ovpn->dev,
 				    "%s: killing primary key as we ran out of IVs\n", __func__);
 			ovpn_crypto_kill_primary(&peer->crypto);
-			ret = ovpn_netlink_notify_swap_keys(peer);
+			ret = ovpn_nl_notify_swap_keys(peer);
 			if (ret < 0)
 				netdev_warn(peer->ovpn->dev,
 					    "couldn't send key killing notification to userspace for peer %u\n", peer->id);

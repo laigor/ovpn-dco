@@ -150,8 +150,7 @@ static inline void ovpn_peer_keepalive_xmit_reset(struct ovpn_peer *peer)
 	mod_timer(&peer->keepalive_xmit, jiffies + delta);
 }
 
-struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn, const struct sockaddr_storage *sa,
-				struct socket *sock, u32 id, uint8_t *local_ip);
+struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn, u32 id);
 
 void ovpn_peer_keepalive_set(struct ovpn_peer *peer, u32 interval, u32 timeout);
 
@@ -168,5 +167,8 @@ struct ovpn_peer *ovpn_peer_lookup_id(struct ovpn_struct *ovpn, u32 peer_id);
 
 void ovpn_peer_update_local_endpoint(struct ovpn_peer *peer, struct sk_buff *skb);
 void ovpn_peer_float(struct ovpn_peer *peer, struct sk_buff *skb);
+
+int ovpn_peer_reset_sockaddr(struct ovpn_peer *peer, const struct sockaddr_storage *ss,
+			     const u8 *local_ip);
 
 #endif /* _NET_OVPN_OVPNPEER_H_ */

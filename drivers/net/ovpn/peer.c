@@ -16,6 +16,7 @@
 
 #include <linux/ip.h>
 #include <linux/ipv6.h>
+#include <linux/skbuff.h>
 #include <linux/list.h>
 #include <linux/timer.h>
 #include <linux/workqueue.h>
@@ -37,7 +38,7 @@ static void ovpn_peer_expire(struct timer_list *t)
 }
 
 /* Construct a new peer */
-static struct ovpn_peer *ovpn_peer_create(struct ovpn_struct *ovpn, u32 id)
+struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn, u32 id)
 {
 	struct ovpn_peer *peer;
 	int ret;
@@ -111,8 +112,8 @@ err:
 }
 
 /* Reset the ovpn_sockaddr associated with a peer */
-static int ovpn_peer_reset_sockaddr(struct ovpn_peer *peer, const struct sockaddr_storage *ss,
-				    const u8 *local_ip)
+int ovpn_peer_reset_sockaddr(struct ovpn_peer *peer, const struct sockaddr_storage *ss,
+			     const u8 *local_ip)
 {
 	struct ovpn_bind *bind;
 	size_t ip_len;
@@ -143,6 +144,9 @@ static int ovpn_peer_reset_sockaddr(struct ovpn_peer *peer, const struct sockadd
 	return 0;
 }
 
+#define ovpn_peer_index(_tbl, _key, _key_len)		\
+	(jhash(_key, _key_len, 0) % HASH_SIZE(_tbl))	\
+
 void ovpn_peer_float(struct ovpn_peer *peer, struct sk_buff *skb)
 {
 	struct sockaddr_storage ss;
@@ -151,6 +155,8 @@ void ovpn_peer_float(struct ovpn_peer *peer, struct sk_buff *skb)
 	struct sockaddr_in *sa;
 	struct ovpn_bind *bind;
 	sa_family_t family;
+	size_t salen;
+	u32 index;
 
 	rcu_read_lock();
 	bind = rcu_dereference(peer->bind);
@@ -171,6 +177,7 @@ void ovpn_peer_float(struct ovpn_peer *peer, struct sk_buff *skb)
 		sa->sin_family = AF_INET;
 		sa->sin_addr.s_addr = ip_hdr(skb)->saddr;
 		sa->sin_port = udp_hdr(skb)->source;
+		salen = sizeof(*sa);
 		break;
 	case AF_INET6:
 		sa6 = (struct sockaddr_in6 *)&ss;
@@ -178,6 +185,7 @@ void ovpn_peer_float(struct ovpn_peer *peer, struct sk_buff *skb)
 		sa6->sin6_addr = ipv6_hdr(skb)->saddr;
 		sa6->sin6_port = udp_hdr(skb)->source;
 		sa6->sin6_scope_id = ipv6_iface_scope_id(&ipv6_hdr(skb)->saddr, skb->skb_iif);
+		salen = sizeof(*sa6);
 		break;
 	default:
 		goto unlock;
@@ -185,6 +193,16 @@ void ovpn_peer_float(struct ovpn_peer *peer, struct sk_buff *skb)
 
 	netdev_dbg(peer->ovpn->dev, "%s: peer %d floated to %pIScp", __func__, peer->id, &ss);
 	ovpn_peer_reset_sockaddr(peer, (struct sockaddr_storage *)&ss, local_ip);
+
+	spin_lock_bh(&peer->ovpn->peers.lock);
+	/* remove old hashing */
+	hlist_del_init_rcu(&peer->hash_entry_transp_addr);
+	/* re-add with new transport address */
+	index = ovpn_peer_index(peer->ovpn->peers.by_transp_addr, &ss, salen);
+	hlist_add_head_rcu(&peer->hash_entry_transp_addr,
+			   &peer->ovpn->peers.by_transp_addr[index]);
+	spin_unlock_bh(&peer->ovpn->peers.lock);
+
 unlock:
 	rcu_read_unlock();
 }
@@ -238,7 +256,7 @@ static void ovpn_peer_delete_work(struct work_struct *work)
 	struct ovpn_peer *peer = container_of(work, struct ovpn_peer,
 					      delete_work);
 	ovpn_peer_release(peer);
-	ovpn_netlink_notify_del_peer(peer);
+	ovpn_nl_notify_del_peer(peer);
 }
 
 /* Use with kref_put calls, when releasing refcount
@@ -251,42 +269,6 @@ void ovpn_peer_release_kref(struct kref *kref)
 
 	INIT_WORK(&peer->delete_work, ovpn_peer_delete_work);
 	queue_work(peer->ovpn->events_wq, &peer->delete_work);
-}
-
-struct ovpn_peer *ovpn_peer_new(struct ovpn_struct *ovpn, const struct sockaddr_storage *sa,
-				struct socket *sock, u32 id, uint8_t *local_ip)
-{
-	struct ovpn_peer *peer;
-	int ret;
-
-	/* create new peer */
-	peer = ovpn_peer_create(ovpn, id);
-	if (IS_ERR(peer))
-		return peer;
-
-	if (sock->sk->sk_protocol == IPPROTO_UDP) {
-		/* a UDP peer must have a remote endpoint */
-		if (!sa) {
-			ovpn_peer_release(peer);
-			return ERR_PTR(-EINVAL);
-		}
-
-		/* set peer sockaddr */
-		ret = ovpn_peer_reset_sockaddr(peer, sa, local_ip);
-		if (ret < 0) {
-			ovpn_peer_release(peer);
-			return ERR_PTR(ret);
-		}
-	}
-
-	peer->sock = ovpn_socket_new(sock, peer);
-	if (IS_ERR(peer->sock)) {
-		peer->sock = NULL;
-		ovpn_peer_release(peer);
-		return ERR_PTR(-ENOTSOCK);
-	}
-
-	return peer;
 }
 
 /* Configure keepalive parameters */
@@ -314,9 +296,6 @@ void ovpn_peer_keepalive_set(struct ovpn_peer *peer, u32 interval, u32 timeout)
 		del_timer(&peer->keepalive_recv);
 	}
 }
-
-#define ovpn_peer_index(_tbl, _key, _key_len)		\
-	(jhash(_key, _key_len, 0) % HASH_SIZE(_tbl))	\
 
 static struct ovpn_peer *ovpn_peer_lookup_vpn_addr4(struct hlist_head *head, __be32 *addr)
 {
@@ -361,8 +340,18 @@ static struct ovpn_peer *ovpn_peer_lookup_vpn_addr6(struct hlist_head *head, str
 	return peer;
 }
 
+static __be32 ovpn_nexthop4(struct sk_buff *skb)
+{
+	struct rtable *rt = skb_rtable(skb);
+
+	if (rt && rt->rt_uses_gateway)
+		return rt->rt_gw4;
+
+	return ip_hdr(skb)->daddr;
+}
+
 /**
- * ovpn_nexthop4() - looks up the IP of the nexthop for the given destination
+ * ovpn_rpf4() - looks up the IP of the nexthop for the given destination
  *
  * Looks up in the IPv4 system routing table the IO of the nexthop to be used
  * to reach the destination passed as argument. IF no nexthop can be found, the
@@ -373,31 +362,42 @@ static struct ovpn_peer *ovpn_peer_lookup_vpn_addr6(struct hlist_head *head, str
  *
  * Return the IP of the next hop if found or the dst itself otherwise
  */
-static __be32 ovpn_nexthop4(struct ovpn_struct *ovpn, __be32 dst)
+static bool ovpn_rpf4(struct ovpn_struct *ovpn, __be32 src)
 {
 	struct rtable *rt;
 	struct flowi4 fl = {
-		.daddr = dst
+		.daddr = src
 	};
 
 	rt = ip_route_output_flow(dev_net(ovpn->dev), &fl, NULL);
 	if (IS_ERR(rt)) {
-		net_dbg_ratelimited("%s: no route to host %pI4\n", __func__, &dst);
-		/* if we end up here this packet is probably going to be thrown away later */
-		return dst;
+		net_dbg_ratelimited("%s: no route to host %pI4\n", __func__, &src);
+		/* if we end up here this packet is probably going to be
+		 * thrown away later
+		 */
+		return src;
 	}
 
 	if (!rt->rt_uses_gateway)
 		goto out;
 
-	dst = rt->rt_gw4;
+	src = rt->rt_gw4;
 out:
-	ip_rt_put(rt);
-	return dst;
+	return src;
+}
+
+static struct in6_addr ovpn_nexthop6(struct sk_buff *skb)
+{
+	struct rt6_info *rt = (struct rt6_info *)skb_rtable(skb);
+
+	if (!rt || !(rt->rt6i_flags & RTF_GATEWAY))
+		return ipv6_hdr(skb)->daddr;
+
+	return rt->rt6i_gateway;
 }
 
 /**
- * ovpn_nexthop6() - looks up the IPv6 of the nexthop for the given destination
+ * ovpn_rpf6() - looks up the IPv6 of the nexthop for the given destination
  *
  * Looks up in the IPv6 system routing table the IO of the nexthop to be used
  * to reach the destination passed as argument. IF no nexthop can be found, the
@@ -408,30 +408,28 @@ out:
  *
  * Return the IP of the next hop if found or the dst itself otherwise
  */
-static struct in6_addr ovpn_nexthop6(struct ovpn_struct *ovpn, struct in6_addr dst)
+static struct in6_addr ovpn_rpf6(struct ovpn_struct *ovpn, struct in6_addr src)
 {
 #if IS_ENABLED(CONFIG_IPV6)
 	struct rt6_info *rt;
 	struct flowi6 fl = {
-		.daddr = dst,
+		.daddr = src,
 	};
 
 	rt = (struct rt6_info *)ipv6_stub->ipv6_dst_lookup_flow(dev_net(ovpn->dev), NULL, &fl,
 								NULL);
 	if (IS_ERR(rt)) {
-		net_dbg_ratelimited("%s: no route to host %pI6\n", __func__, &dst);
+		net_dbg_ratelimited("%s: no route to host %pI6\n", __func__, &src);
 		/* if we end up here this packet is probably going to be thrown away later */
-		return dst;
+		return src;
 	}
 
-	if (!(rt->rt6i_flags & RTF_GATEWAY))
-		goto out;
+	if (rt->rt6i_flags & RTF_GATEWAY)
+		src = rt->rt6i_gateway;
 
-	dst = rt->rt6i_gateway;
-out:
 	dst_release((struct dst_entry *)rt);
 #endif
-	return dst;
+	return src;
 }
 
 /**
@@ -474,24 +472,14 @@ struct ovpn_peer *ovpn_peer_lookup_vpn_addr(struct ovpn_struct *ovpn, struct sk_
 
 	switch (sa_fam) {
 	case AF_INET:
-		if (use_src)
-			addr4 = ip_hdr(skb)->saddr;
-		else
-			addr4 = ip_hdr(skb)->daddr;
-		addr4 = ovpn_nexthop4(ovpn, addr4);
-
+		addr4 = ovpn_nexthop4(skb);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr4, sizeof(addr4));
 		head = &ovpn->peers.by_vpn_addr[index];
 
 		peer = ovpn_peer_lookup_vpn_addr4(head, &addr4);
 		break;
 	case AF_INET6:
-		if (use_src)
-			addr6 = ipv6_hdr(skb)->saddr;
-		else
-			addr6 = ipv6_hdr(skb)->daddr;
-		addr6 = ovpn_nexthop6(ovpn, addr6);
-
+		addr6 = ovpn_nexthop6(skb);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr6, sizeof(addr6));
 		head = &ovpn->peers.by_vpn_addr[index];
 
@@ -719,7 +707,7 @@ static int ovpn_peer_add_mp(struct ovpn_struct *ovpn, struct ovpn_peer *peer)
 
 	hlist_del_init_rcu(&peer->hash_entry_transp_addr);
 	bind = rcu_dereference_protected(peer->bind, true);
-	/* peers connected via UDP have bind == NULL */
+	/* peers connected via TCP have bind == NULL */
 	if (bind) {
 		switch (bind->sa.in4.sin_family) {
 		case AF_INET:

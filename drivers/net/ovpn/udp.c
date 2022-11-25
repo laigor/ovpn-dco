@@ -60,36 +60,36 @@ static int ovpn_udp_encap_recv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	opcode = ovpn_opcode_from_skb(skb, sizeof(struct udphdr));
-	if (likely(opcode == OVPN_DATA_V2)) {
-		peer_id = ovpn_peer_id_from_skb(skb, sizeof(struct udphdr));
-		/* some OpenVPN server implementations send data packets with the peer-id set to
-		 * undef. In this case we skip the peer lookup by peer-id and we try with the
-		 * transport address
-		 */
-		if (peer_id != OVPN_PEER_ID_UNDEF) {
-			peer = ovpn_peer_lookup_id(ovpn, peer_id);
-			if (!peer) {
-				net_err_ratelimited("%s: received data from unknown peer (id: %d)\n",
-						   __func__, peer_id);
-				goto drop;
-			}
+	if (unlikely(opcode != OVPN_DATA_V2)) {
+		/* DATA_V1 is not supported */
+		if (opcode == OVPN_DATA_V1)
+			goto drop;
 
-			/* check if this peer changed it's IP address and update state */
-			ovpn_peer_float(peer, skb);
+		/* unknown or control packet: let it bubble up to userspace */
+		return 1;
+	}
+
+	peer_id = ovpn_peer_id_from_skb(skb, sizeof(struct udphdr));
+	/* some OpenVPN server implementations send data packets with the peer-id set to
+	 * undef. In this case we skip the peer lookup by peer-id and we try with the
+	 * transport address
+	 */
+	if (peer_id != OVPN_PEER_ID_UNDEF) {
+		peer = ovpn_peer_lookup_id(ovpn, peer_id);
+		if (!peer) {
+			net_err_ratelimited("%s: received data from unknown peer (id: %d)\n",
+					   __func__, peer_id);
+			goto drop;
 		}
+
+		/* check if this peer changed it's IP address and update state */
+		ovpn_peer_float(peer, skb);
 	}
 
 	if (!peer) {
-		/* might be a control packet or a data packet with undef peer-id */
+		/* data packet with undef peer-id */
 		peer = ovpn_peer_lookup_transp_addr(ovpn, skb);
 		if (unlikely(!peer)) {
-			if (opcode != OVPN_DATA_V2) {
-				netdev_dbg(ovpn->dev,
-					   "%s: control packet from unknown peer, sending to userspace",
-					   __func__);
-				return 1;
-			}
-
 			netdev_dbg(ovpn->dev,
 				   "%s: received data with undef peer-id from unknown source\n",
 				   __func__);
