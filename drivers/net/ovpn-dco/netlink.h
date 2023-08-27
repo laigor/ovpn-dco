@@ -18,5 +18,6 @@ void ovpn_netlink_unregister(void);
 int ovpn_netlink_send_packet(struct ovpn_struct *ovpn, const struct ovpn_peer *peer,
 			     const u8 *buf, size_t len);
 int ovpn_netlink_notify_del_peer(struct ovpn_peer *peer);
+int ovpn_netlink_notify_swap_keys(struct ovpn_peer *peer);
 
 #endif /* _NET_OVPN_DCO_NETLINK_H_ */
