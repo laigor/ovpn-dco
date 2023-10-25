@@ -72,7 +72,7 @@ static const struct nla_policy ovpn_nl_policy_peer[NUM_OVPN_A_PEER] = {
 /** Generic message container policy */
 static const struct nla_policy ovpn_nl_policy[NUM_OVPN_A] = {
 	[OVPN_A_IFINDEX] = { .type = NLA_U32 },
-	[OVPN_A_IFNAME] = { .type = NLA_U32 },
+	[OVPN_A_IFNAME] = NLA_POLICY_MAX_LEN(IFNAMSIZ),
 	[OVPN_A_MODE] = NLA_POLICY_RANGE(NLA_U8, __OVPN_MODE_FIRST,
 					 NUM_OVPN_MODE - 1),
 	[OVPN_A_PEER] = NLA_POLICY_NESTED(ovpn_nl_policy_peer),
@@ -150,7 +150,9 @@ static void ovpn_post_doit(const struct genl_split_ops *ops, struct sk_buff *skb
 	struct ovpn_struct *ovpn;
 
 	ovpn = info->user_ptr[0];
-	dev_put(ovpn->dev);
+	/* in case of OVPN_CMD_NEW_IFACE, there is no pre-stored device */
+	if (ovpn)
+		dev_put(ovpn->dev);
 }
 
 static int ovpn_nl_get_key_dir(struct genl_info *info, struct nlattr *key,
@@ -372,7 +374,7 @@ static int ovpn_nl_set_peer(struct sk_buff *skb, struct genl_info *info)
 		}
 	}
 
-	if (!attrs[OVPN_A_PEER_SOCKET]) {
+	if (new_peer && !attrs[OVPN_A_PEER_SOCKET]) {
 		netdev_err(ovpn->dev, "%s: peer socket missing\n", __func__);
 		ret = -EINVAL;
 		goto peer_release;
@@ -386,103 +388,6 @@ static int ovpn_nl_set_peer(struct sk_buff *skb, struct genl_info *info)
 		goto peer_release;
 	}
 
-	/* Only when using UDP as transport protocol the remote endpoint can be configured
-	 * so that ovpn knows where to send packets to.
-	 *
-	 * In case of TCP, the socket is connected to the peer and ovpn will just send bytes
-	 * over it, without the need to specify a destination.
-	 */
-	if (sock->sk->sk_protocol == IPPROTO_UDP && attrs[OVPN_A_PEER_SOCKADDR_REMOTE]) {
-		ss = nla_data(attrs[OVPN_A_PEER_SOCKADDR_REMOTE]);
-		sa_len = nla_len(attrs[OVPN_A_PEER_SOCKADDR_REMOTE]);
-		switch (sa_len) {
-		case sizeof(struct sockaddr_in):
-			if (ss->ss_family == AF_INET)
-				/* valid sockaddr */
-				break;
-
-			netdev_err(ovpn->dev, "%s: remote sockaddr_in has invalid family\n",
-				   __func__);
-			ret = -EINVAL;
-			goto peer_release;
-		case sizeof(struct sockaddr_in6):
-			if (ss->ss_family == AF_INET6)
-				/* valid sockaddr */
-				break;
-
-			netdev_err(ovpn->dev, "%s: remote sockaddr_in6 has invalid family\n",
-				   __func__);
-			ret = -EINVAL;
-			goto peer_release;
-		default:
-			netdev_err(ovpn->dev, "%s: invalid size for sockaddr\n", __func__);
-			ret = -EINVAL;
-			goto peer_release;
-		}
-
-		if (ss->ss_family == AF_INET6) {
-			in6 = (struct sockaddr_in6 *)ss;
-
-			if (ipv6_addr_type(&in6->sin6_addr) & IPV6_ADDR_MAPPED) {
-				mapped.sin_family = AF_INET;
-				mapped.sin_addr.s_addr = in6->sin6_addr.s6_addr32[3];
-				mapped.sin_port = in6->sin6_port;
-				ss = (struct sockaddr_storage *)&mapped;
-			}
-		}
-
-		/* When using UDP we may be talking over socket bound to 0.0.0.0/::.
-		 * In this case, if the host has multiple IPs, we need to make sure
-		 * that outgoing traffic has as source IP the same address that the
-		 * peer is using to reach us.
-		 *
-		 * Since early control packets were all forwarded to userspace, we
-		 * need the latter to tell us what IP has to be used.
-		 */
-		if (attrs[OVPN_A_PEER_LOCAL_IP]) {
-			ip_len = nla_len(attrs[OVPN_A_PEER_LOCAL_IP]);
-			local_ip = nla_data(attrs[OVPN_A_PEER_LOCAL_IP]);
-
-			if (ip_len == sizeof(struct in_addr)) {
-				if (ss->ss_family != AF_INET) {
-					netdev_dbg(ovpn->dev,
-						   "%s: the specified local IP is IPv4, but the peer endpoint is not\n",
-						   __func__);
-					ret = -EINVAL;
-					goto peer_release;
-				}
-			} else if (ip_len == sizeof(struct in6_addr)) {
-				bool is_mapped = ipv6_addr_type((struct in6_addr *)local_ip) &
-						 IPV6_ADDR_MAPPED;
-
-				if (ss->ss_family != AF_INET6 && !is_mapped) {
-					netdev_dbg(ovpn->dev,
-						   "%s: the specified local IP is IPv6, but the peer endpoint is not\n",
-						   __func__);
-					ret = -EINVAL;
-					goto peer_release;
-				}
-
-				if (is_mapped)
-					/* this is an IPv6-mapped IPv4 address, therefore extract
-					 * the actual v4 address from the last 4 bytes
-					 */
-					local_ip += 12;
-			} else {
-				netdev_dbg(ovpn->dev,
-					   "%s: invalid length %zu for local IP\n", __func__,
-					   ip_len);
-				ret = -EINVAL;
-				goto peer_release;
-			}
-		}
-
-		/* set peer sockaddr */
-		ret = ovpn_peer_reset_sockaddr(peer, ss, local_ip);
-		if (ret < 0)
-			goto peer_release;
-	}
-
 	if (attrs[OVPN_A_PEER_SOCKET]) {
 		/* lookup the fd in the kernel table and extract the socket object */
 		sockfd = nla_get_u32(attrs[OVPN_A_PEER_SOCKET]);
@@ -494,6 +399,104 @@ static int ovpn_nl_set_peer(struct sk_buff *skb, struct genl_info *info)
 			ret = -ENOTSOCK;
 			goto peer_release;
 		}
+
+		/* Only when using UDP as transport protocol the remote endpoint can be configured
+		 * so that ovpn knows where to send packets to.
+		 *
+		 * In case of TCP, the socket is connected to the peer and ovpn will just send bytes
+		 * over it, without the need to specify a destination.
+		 */
+		if (sock->sk->sk_protocol == IPPROTO_UDP && attrs[OVPN_A_PEER_SOCKADDR_REMOTE]) {
+			ss = nla_data(attrs[OVPN_A_PEER_SOCKADDR_REMOTE]);
+			sa_len = nla_len(attrs[OVPN_A_PEER_SOCKADDR_REMOTE]);
+			switch (sa_len) {
+			case sizeof(struct sockaddr_in):
+				if (ss->ss_family == AF_INET)
+					/* valid sockaddr */
+					break;
+
+				netdev_err(ovpn->dev, "%s: remote sockaddr_in has invalid family\n",
+					   __func__);
+				ret = -EINVAL;
+				goto peer_release;
+			case sizeof(struct sockaddr_in6):
+				if (ss->ss_family == AF_INET6)
+					/* valid sockaddr */
+					break;
+
+				netdev_err(ovpn->dev, "%s: remote sockaddr_in6 has invalid family\n",
+					   __func__);
+				ret = -EINVAL;
+				goto peer_release;
+			default:
+				netdev_err(ovpn->dev, "%s: invalid size for sockaddr\n", __func__);
+				ret = -EINVAL;
+				goto peer_release;
+			}
+
+			if (ss->ss_family == AF_INET6) {
+				in6 = (struct sockaddr_in6 *)ss;
+
+				if (ipv6_addr_type(&in6->sin6_addr) & IPV6_ADDR_MAPPED) {
+					mapped.sin_family = AF_INET;
+					mapped.sin_addr.s_addr = in6->sin6_addr.s6_addr32[3];
+					mapped.sin_port = in6->sin6_port;
+					ss = (struct sockaddr_storage *)&mapped;
+				}
+			}
+
+			/* When using UDP we may be talking over socket bound to 0.0.0.0/::.
+			 * In this case, if the host has multiple IPs, we need to make sure
+			 * that outgoing traffic has as source IP the same address that the
+			 * peer is using to reach us.
+			 *
+			 * Since early control packets were all forwarded to userspace, we
+			 * need the latter to tell us what IP has to be used.
+			 */
+			if (attrs[OVPN_A_PEER_LOCAL_IP]) {
+				ip_len = nla_len(attrs[OVPN_A_PEER_LOCAL_IP]);
+				local_ip = nla_data(attrs[OVPN_A_PEER_LOCAL_IP]);
+
+				if (ip_len == sizeof(struct in_addr)) {
+					if (ss->ss_family != AF_INET) {
+						netdev_dbg(ovpn->dev,
+							   "%s: the specified local IP is IPv4, but the peer endpoint is not\n",
+							   __func__);
+						ret = -EINVAL;
+						goto peer_release;
+					}
+				} else if (ip_len == sizeof(struct in6_addr)) {
+					bool is_mapped = ipv6_addr_type((struct in6_addr *)local_ip) &
+						IPV6_ADDR_MAPPED;
+
+					if (ss->ss_family != AF_INET6 && !is_mapped) {
+						netdev_dbg(ovpn->dev,
+							   "%s: the specified local IP is IPv6, but the peer endpoint is not\n",
+							   __func__);
+						ret = -EINVAL;
+						goto peer_release;
+					}
+
+					if (is_mapped)
+						/* this is an IPv6-mapped IPv4 address, therefore extract
+						 * the actual v4 address from the last 4 bytes
+						 */
+						local_ip += 12;
+				} else {
+					netdev_dbg(ovpn->dev,
+						   "%s: invalid length %zu for local IP\n", __func__,
+						   ip_len);
+					ret = -EINVAL;
+					goto peer_release;
+				}
+			}
+
+			/* set peer sockaddr */
+			ret = ovpn_peer_reset_sockaddr(peer, ss, local_ip);
+			if (ret < 0)
+				goto peer_release;
+		}
+
 		if (peer->sock)
 			ovpn_socket_put(peer->sock);
 
@@ -799,9 +802,13 @@ static int ovpn_nl_new_iface(struct sk_buff *skb, struct genl_info *info)
 	if (IS_ERR(dev))
 		return -PTR_ERR(dev);
 
+	dev_net_set(dev, genl_info_net(info));
+
 	ret = ovpn_struct_init(dev);
 	if (ret < 0)
 		return ret;
+
+	ovpn = netdev_priv(dev);
 
 	ovpn->mode = OVPN_MODE_P2P;
 	if (info->attrs[OVPN_A_MODE]) {
@@ -810,7 +817,13 @@ static int ovpn_nl_new_iface(struct sk_buff *skb, struct genl_info *info)
 			   ovpn->mode);
 	}
 
-	return register_netdevice(dev);
+	ret = register_netdev(dev);
+	if (ret < 0) {
+		netdev_err(dev, "cannot register interface %s: %u\n", dev->name, ret);
+		free_netdev(dev);
+	}
+
+	return ret;
 }
 
 static int ovpn_nl_del_iface(struct sk_buff *skb, struct genl_info *info)
@@ -826,7 +839,11 @@ static int ovpn_nl_del_iface(struct sk_buff *skb, struct genl_info *info)
 		break;
 	}
 
-	unregister_netdevice(ovpn->dev);
+	/* we set the user_ptr to NULL to prevent post_doit from releasing it again */
+	info->user_ptr[0] = NULL;
+	dev_put(ovpn->dev);
+	unregister_netdev(ovpn->dev);
+
 	return 0;
 }
 

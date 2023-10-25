@@ -79,6 +79,7 @@ struct ovpn_ctx {
 	} peer_ip;
 
 	unsigned int ifindex;
+	const char *ifname;
 
 	int socket;
 
@@ -163,7 +164,9 @@ static struct nl_ctx *nl_ctx_alloc_flags(struct ovpn_ctx *ovpn,
 	nl_socket_set_cb(ctx->nl_sock, ctx->nl_cb);
 
 	genlmsg_put(ctx->nl_msg, 0, 0, ctx->ovpn_dco_id, 0, flags, cmd, 0);
-	NLA_PUT_U32(ctx->nl_msg, OVPN_A_IFINDEX, ovpn->ifindex);
+
+	if (ovpn->ifindex > 0)
+		NLA_PUT_U32(ctx->nl_msg, OVPN_A_IFINDEX, ovpn->ifindex);
 
 	return ctx;
 nla_put_failure:
@@ -1329,6 +1332,33 @@ static int ovpn_parse_set_peer(struct ovpn_ctx *ovpn, int argc, char *argv[])
 	return 0;
 }
 
+static int ovpn_new_iface(struct ovpn_ctx *ovpn)
+{
+	int ret;
+	struct nl_ctx *ctx = nl_ctx_alloc(ovpn, OVPN_CMD_NEW_IFACE);
+	if (!ctx)
+		return -ENOMEM;
+
+	NLA_PUT(ctx->nl_msg, OVPN_A_IFNAME, strlen(ovpn->ifname) + 1, ovpn->ifname);
+
+	ret = ovpn_nl_msg_send(ctx, NULL);
+nla_put_failure:
+	nl_ctx_free(ctx);
+	return ret;
+}
+
+static int ovpn_del_iface(struct ovpn_ctx *ovpn)
+{
+	int ret;
+	struct nl_ctx *ctx = nl_ctx_alloc(ovpn, OVPN_CMD_DEL_IFACE);
+	if (!ctx)
+		return -ENOMEM;
+
+	ret = ovpn_nl_msg_send(ctx, NULL);
+	nl_ctx_free(ctx);
+	return ret;
+}
+
 int main(int argc, char *argv[])
 {
 	struct ovpn_ctx ovpn;
@@ -1343,14 +1373,32 @@ int main(int argc, char *argv[])
 	memset(&ovpn, 0, sizeof(ovpn));
 	ovpn.sa_family = AF_INET;
 
-	ovpn.ifindex = if_nametoindex(argv[1]);
-	if (!ovpn.ifindex) {
-		fprintf(stderr, "cannot find interface: %s\n",
-			strerror(errno));
-		return -1;
+	ovpn.ifname = argv[1];
+
+	if (strcmp(argv[2], "new_iface")) {
+		ovpn.ifindex = if_nametoindex(ovpn.ifname);
+		if (!ovpn.ifindex) {
+			fprintf(stderr, "cannot find interface: %s\n",
+				strerror(errno));
+			return -1;
+		}
 	}
 
-	if (!strcmp(argv[2], "listen")) {
+	if (!strcmp(argv[2], "new_iface")) {
+		ret = ovpn_new_iface(&ovpn);
+		if (ret < 0) {
+			fprintf(stderr, "cannot add iface %s: %s\n", ovpn.ifname,
+				strerror(-ret));
+			return -1;
+		}
+	} else if (!strcmp(argv[2], "del_iface")) {
+		ret = ovpn_del_iface(&ovpn);
+		if (ret < 0) {
+			fprintf(stderr, "cannot delete iface %s: %s\n", ovpn.ifname,
+				strerror(-ret));
+			return -1;
+		}
+	} else if (!strcmp(argv[2], "listen")) {
 		char peer_id[10], vpnip[100];
 		int n;
 		FILE *fp;

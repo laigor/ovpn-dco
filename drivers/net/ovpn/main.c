@@ -144,7 +144,7 @@ static void ovpn_setup(struct net_device *dev)
 	dev->max_mtu = IP_MAX_MTU - overhead;
 
 	dev->type = ARPHRD_NONE;
-	dev->flags = IFF_NOARP;
+	dev->flags = IFF_POINTOPOINT | IFF_NOARP;
 
 	dev->features |= feat;
 	dev->hw_features |= feat;

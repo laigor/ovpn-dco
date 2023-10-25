@@ -33,7 +33,7 @@ function setup_ns() {
 		sleep 5
 	fi
 
-	ip -n peer$1 link add tun0 type ovpn-dco
+	ip netns exec peer$1 $OVPN_CLI tun0 new_iface
 	ip -n peer$1 addr add $2 dev tun0
 	ip -n peer$1 link set tun0 up
 }
@@ -72,7 +72,7 @@ for p in $(seq 1 10); do
 	ip -n peer0 link del veth${p} 2>/dev/null || true
 done
 for p in $(seq 0 10); do
-	ip -n peer${p} link del tun0 2>/dev/null || true
+	ip netns exec peer${p} $OVPN_CLI tun0 del_iface 2>/dev/null || true
 	ip netns del peer${p} 2>/dev/null || true
 done
 

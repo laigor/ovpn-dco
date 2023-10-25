@@ -289,7 +289,8 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	/* get primary key to be used for encrypting data */
 	ks = ovpn_crypto_key_slot_primary(&peer->crypto);
 	if (unlikely(!ks)) {
-		net_warn_ratelimited("%s: error while retrieving primary key slot\n", __func__);
+		net_warn_ratelimited("%s: error while retrieving primary key slot for peer %u\n",
+				     __func__, peer->id);
 		return false;
 	}
 
