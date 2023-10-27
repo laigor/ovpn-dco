@@ -207,13 +207,13 @@ static int ovpn_nl_set_key(struct sk_buff *skb, struct genl_info *info)
 	if (!info->attrs[OVPN_A_PEER])
 		return -EINVAL;
 
-	ret = nla_parse_nested(p_attrs, NUM_OVPN_A_PEER, info->attrs[OVPN_A_PEER],
+	ret = nla_parse_nested(p_attrs, NUM_OVPN_A_PEER - 1, info->attrs[OVPN_A_PEER],
 			       NULL, info->extack);
 
 	if (!p_attrs[OVPN_A_PEER_ID] || !p_attrs[OVPN_A_PEER_KEYCONF])
 		return -EINVAL;
 
-	ret = nla_parse_nested(attrs, NUM_OVPN_A_KEYCONF, p_attrs[OVPN_A_PEER_KEYCONF],
+	ret = nla_parse_nested(attrs, NUM_OVPN_A_KEYCONF - 1, p_attrs[OVPN_A_PEER_KEYCONF],
 			       NULL, info->extack);
 	if (ret)
 		return ret;
@@ -275,13 +275,13 @@ static int ovpn_nl_del_key(struct sk_buff *skb, struct genl_info *info)
 	if (!info->attrs[OVPN_A_PEER])
 		return -EINVAL;
 
-	ret = nla_parse_nested(p_attrs, NUM_OVPN_A_PEER, info->attrs[OVPN_A_PEER],
+	ret = nla_parse_nested(p_attrs, NUM_OVPN_A_PEER - 1, info->attrs[OVPN_A_PEER],
 			       NULL, info->extack);
 
 	if (!p_attrs[OVPN_A_PEER_ID] || !p_attrs[OVPN_A_PEER_KEYCONF])
 		return -EINVAL;
 
-	ret = nla_parse_nested(attrs, NUM_OVPN_A_KEYCONF, p_attrs[OVPN_A_PEER_KEYCONF],
+	ret = nla_parse_nested(attrs, NUM_OVPN_A_KEYCONF - 1, p_attrs[OVPN_A_PEER_KEYCONF],
 			       NULL, info->extack);
 	if (ret)
 		return ret;
@@ -313,7 +313,7 @@ static int ovpn_nl_swap_keys(struct sk_buff *skb, struct genl_info *info)
 	if (!info->attrs[OVPN_A_PEER])
 		return -EINVAL;
 
-	ret = nla_parse_nested(attrs, NUM_OVPN_A_PEER + 1, info->attrs[OVPN_A_PEER],
+	ret = nla_parse_nested(attrs, NUM_OVPN_A_PEER - 1, info->attrs[OVPN_A_PEER],
 			       NULL, info->extack);
 	if (ret)
 		return ret;
@@ -670,7 +670,7 @@ static int ovpn_nl_get_peer(struct sk_buff *skb, struct genl_info *info)
 	if (!info->attrs[OVPN_A_PEER])
 		return -EINVAL;
 
-	ret = nla_parse_nested(attrs, NUM_OVPN_A_PEER + 1, info->attrs[OVPN_A_PEER], NULL,
+	ret = nla_parse_nested(attrs, NUM_OVPN_A_PEER - 1, info->attrs[OVPN_A_PEER], NULL,
 			       info->extack);
 	if (ret)
 		return ret;
@@ -768,7 +768,7 @@ static int ovpn_nl_del_peer(struct sk_buff *skb, struct genl_info *info)
 	if (!info->attrs[OVPN_A_PEER])
 		return -EINVAL;
 
-	ret = nla_parse_nested(attrs, NUM_OVPN_A_PEER + 1, info->attrs[OVPN_A_PEER], NULL,
+	ret = nla_parse_nested(attrs, NUM_OVPN_A_PEER - 1, info->attrs[OVPN_A_PEER], NULL,
 			       info->extack);
 	if (ret)
 		return ret;
@@ -819,7 +819,7 @@ static int ovpn_nl_new_iface(struct sk_buff *skb, struct genl_info *info)
 
 	ret = register_netdev(dev);
 	if (ret < 0) {
-		netdev_err(dev, "cannot register interface %s: %u\n", dev->name, ret);
+		netdev_dbg(dev, "cannot register interface %s: %d\n", dev->name, ret);
 		free_netdev(dev);
 	}
 
