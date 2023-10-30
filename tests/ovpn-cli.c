@@ -1375,6 +1375,7 @@ int main(int argc, char *argv[])
 
 	ovpn.ifname = argv[1];
 
+	/* every command except new_iface should have a ifindex set */
 	if (strcmp(argv[2], "new_iface")) {
 		ovpn.ifindex = if_nametoindex(ovpn.ifname);
 		if (!ovpn.ifindex) {

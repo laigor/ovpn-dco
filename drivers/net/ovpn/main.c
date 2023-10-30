@@ -35,9 +35,22 @@
 #define DRV_DESCRIPTION	"OpenVPN data channel offload (ovpn)"
 #define DRV_COPYRIGHT	"(C) 2020-2023 OpenVPN, Inc."
 
+static LIST_HEAD(dev_list);
+
 static void ovpn_struct_free(struct net_device *net)
 {
 	struct ovpn_struct *ovpn = netdev_priv(net);
+
+	printk("CALLING DESTRUCTOR ON %s\n", net->name);
+
+	switch (ovpn->mode) {
+	case OVPN_MODE_P2P:
+		ovpn_peer_release_p2p(ovpn);
+		break;
+	default:
+		ovpn_peers_free(ovpn);
+		break;
+	}
 
 	security_tun_dev_free_security(ovpn->security);
 	free_percpu(net->tstats);
@@ -154,10 +167,72 @@ static void ovpn_setup(struct net_device *dev)
 	dev->needed_tailroom = OVPN_MAX_PADDING;
 }
 
-struct net_device *ovpn_iface_create(const char *name)
+int ovpn_iface_create(const char *name, enum ovpn_mode mode, struct net *net)
 {
-	return alloc_netdev(sizeof(struct ovpn_struct), name, NET_NAME_USER, ovpn_setup);
+	struct net_device *dev;
+	struct ovpn_struct *ovpn;
+	int ret;
+
+	dev = alloc_netdev(sizeof(struct ovpn_struct), name, NET_NAME_USER, ovpn_setup);
+
+	dev_net_set(dev, net);
+
+	ret = ovpn_struct_init(dev);
+	if (ret < 0)
+		goto err;
+
+	ovpn = netdev_priv(dev);
+	ovpn->mode = mode;
+
+	printk("LOCKING\n");
+	rtnl_lock();
+
+	printk("REGISTERING!\n");
+	ret = register_netdevice(dev);
+	if (ret < 0) {
+		netdev_dbg(dev, "cannot register interface %s: %d\n", dev->name, ret);
+		rtnl_unlock();
+		goto err;
+	}
+	list_add(&ovpn->dev_list, &dev_list);
+	printk("UNLOCKING!\n");
+	rtnl_unlock();
+
+	return ret;
+
+err:
+	free_netdev(dev);
+	return ret;
 }
+
+void ovpn_iface_destruct(struct ovpn_struct *ovpn)
+{
+	ASSERT_RTNL();
+
+	dev_put(ovpn->dev);
+	list_del(&ovpn->dev_list);
+	unregister_netdevice(ovpn->dev);
+}
+
+/*static void ovpn_ns_pre_exit(struct net *net)
+{
+	struct ovpn_struct *ovpn;
+
+	rtnl_lock();
+	list_for_each_entry(ovpn, &dev_list, dev_list) {
+		if (dev_net(ovpn->dev) != net)
+			continue;
+
+		netif_carrier_off(ovpn->dev);
+		ovpn_iface_destruct(ovpn);
+		dev_net_set(ovpn->dev, NULL);
+	}
+	rtnl_unlock();
+}*/
+
+/*static struct pernet_operations pernet_ops = {
+	.pre_exit = ovpn_ns_pre_exit
+};*/
 
 static int __init ovpn_init(void)
 {
@@ -177,11 +252,22 @@ static int __init ovpn_init(void)
 		return err;
 	}
 
+/*	err = register_pernet_device(&pernet_ops);
+	if (err) {
+		pr_err("ovpn: can't register pernet ops: %d\n", err);
+		goto unreg_nl;
+	}
+
 	return 0;
+
+unreg_nl:
+	ovpn_nl_unregister();*/
+	return err;
 }
 
 static __exit void ovpn_cleanup(void)
 {
+//	unregister_pernet_device(&pernet_ops);
 	ovpn_nl_unregister();
 	rcu_barrier(); /* because we use call_rcu */
 }

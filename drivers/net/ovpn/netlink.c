@@ -121,11 +121,13 @@ static int ovpn_pre_doit(const struct genl_split_ops *ops, struct sk_buff *skb,
 	/* the OVPN_CMD_NEW_IFACE command is different from the rest as it
 	 * just expects an IFNAME, while all the others expect an IFINDEX
 	 */
+	printk("PRE DOIT\n");
 	if (info->genlhdr->cmd == OVPN_CMD_NEW_IFACE) {
 		if (!info->attrs[OVPN_A_IFNAME]) {
 			GENL_SET_ERR_MSG(info, "no interface name specified");
 			return -EINVAL;
 		}
+		printk("EXITING 0\n");
 		return 0;
 	}
 
@@ -791,37 +793,27 @@ static int ovpn_nl_del_peer(struct sk_buff *skb, struct genl_info *info)
 
 static int ovpn_nl_new_iface(struct sk_buff *skb, struct genl_info *info)
 {
-	struct ovpn_struct *ovpn;
+	enum ovpn_mode mode = OVPN_MODE_P2P;
 	struct net_device *dev;
+	char *ifname;
 	int ret;
+
+	printk("CALLING NEW_IFACE\n");
 
 	if (!info->attrs[OVPN_A_IFNAME])
 		return -EINVAL;
 
-	dev = ovpn_iface_create(nla_data(info->attrs[OVPN_A_IFNAME]));
-	if (IS_ERR(dev))
-		return -PTR_ERR(dev);
+	ifname = nla_data(info->attrs[OVPN_A_IFNAME]);
 
-	dev_net_set(dev, genl_info_net(info));
-
-	ret = ovpn_struct_init(dev);
-	if (ret < 0)
-		return ret;
-
-	ovpn = netdev_priv(dev);
-
-	ovpn->mode = OVPN_MODE_P2P;
 	if (info->attrs[OVPN_A_MODE]) {
-		ovpn->mode = nla_get_u8(info->attrs[OVPN_A_MODE]);
-		netdev_dbg(dev, "%s: setting device (%s) mode: %u\n", __func__, dev->name,
-			   ovpn->mode);
+		mode = nla_get_u8(info->attrs[OVPN_A_MODE]);
+		netdev_dbg(dev, "%s: setting device (%s) mode: %u\n", __func__, ifname,
+			   mode);
 	}
 
-	ret = register_netdev(dev);
-	if (ret < 0) {
-		netdev_dbg(dev, "cannot register interface %s: %d\n", dev->name, ret);
-		free_netdev(dev);
-	}
+	ret = ovpn_iface_create(ifname, mode, genl_info_net(info));
+	if (ret < 0)
+		netdev_dbg(dev, "error while creating interface %s: %d\n", ifname, ret);
 
 	return ret;
 }
@@ -830,19 +822,12 @@ static int ovpn_nl_del_iface(struct sk_buff *skb, struct genl_info *info)
 {
 	struct ovpn_struct *ovpn = info->user_ptr[0];
 
-	switch (ovpn->mode) {
-	case OVPN_MODE_P2P:
-		ovpn_peer_release_p2p(ovpn);
-		break;
-	default:
-		ovpn_peers_free(ovpn);
-		break;
-	}
+	rtnl_lock();
+	ovpn_iface_destruct(ovpn);
+	rtnl_unlock();
 
 	/* we set the user_ptr to NULL to prevent post_doit from releasing it again */
 	info->user_ptr[0] = NULL;
-	dev_put(ovpn->dev);
-	unregister_netdev(ovpn->dev);
 
 	return 0;
 }
@@ -1081,7 +1066,7 @@ err:
 /**
  * ovpn_nl_unregister() - unregister the ovpn genl netlink family
  */
-void __exit ovpn_nl_unregister(void)
+void ovpn_nl_unregister(void)
 {
 	netlink_unregister_notifier(&ovpn_nl_notifier);
 	genl_unregister_family(&ovpn_nl_family);

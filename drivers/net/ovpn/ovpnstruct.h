@@ -13,6 +13,7 @@
 #include "peer.h"
 
 #include <uapi/linux/ovpn.h>
+#include <linux/types.h>
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
 
@@ -54,6 +55,8 @@ struct ovpn_struct {
 
 	u32 registered_nl_portid;
 	bool registered_nl_portid_set;
+
+	struct list_head dev_list;
 };
 
 #endif /* _NET_OVPN_OVPNSTRUCT_H_ */

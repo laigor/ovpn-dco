@@ -768,6 +768,7 @@ static int ovpn_peer_add_p2p(struct ovpn_struct *ovpn, struct ovpn_peer *peer)
 	 */
 	tmp = rcu_dereference(ovpn->peer);
 	if (tmp) {
+		printk("ovpn_peer_add_p2p\n");
 		tmp->delete_reason = OVPN_DEL_PEER_REASON_TEARDOWN;
 		ovpn_peer_put(tmp);
 	}
@@ -854,6 +855,7 @@ void ovpn_peer_release_p2p(struct ovpn_struct *ovpn)
 	if (!tmp)
 		goto unlock;
 
+	printk("ovpn_peer_release_p2p\n");
 	ovpn_peer_del_p2p(tmp, OVPN_DEL_PEER_REASON_TEARDOWN);
 unlock:
 	rcu_read_unlock();
@@ -876,6 +878,9 @@ void ovpn_peers_free(struct ovpn_struct *ovpn)
 	struct hlist_node *tmp;
 	struct ovpn_peer *peer;
 	int bkt;
+
+	dump_stack();
+	printk("RELEASING ALL PEERS\n");
 
 	spin_lock_bh(&ovpn->peers.lock);
 	hash_for_each_safe(ovpn->peers.by_id, bkt, tmp, peer, hash_entry_id)
