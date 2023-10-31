@@ -22,6 +22,9 @@ struct ovpn_struct {
 	/* read-mostly objects in this section */
 	struct net_device *dev;
 
+	/* whether this device is still registered with netdev or not */
+	bool registered;
+
 	/* device operation mode (i.e. P2P, MP) */
 	enum ovpn_mode mode;
 

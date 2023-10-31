@@ -30,7 +30,7 @@ enum ovpn_mode;
 
 bool ovpn_dev_is_valid(const struct net_device *dev);
 int ovpn_iface_create(const char *name, enum ovpn_mode mode, struct net *net);
-void ovpn_iface_destruct(struct ovpn_struct *ovpn);
+void ovpn_iface_destruct(struct ovpn_struct *ovpn, bool unregister_device);
 
 #define SKB_HEADER_LEN                                       \
 	(max(sizeof(struct iphdr), sizeof(struct ipv6hdr)) + \

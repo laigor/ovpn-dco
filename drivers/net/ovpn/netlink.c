@@ -823,7 +823,7 @@ static int ovpn_nl_del_iface(struct sk_buff *skb, struct genl_info *info)
 	struct ovpn_struct *ovpn = info->user_ptr[0];
 
 	rtnl_lock();
-	ovpn_iface_destruct(ovpn);
+	ovpn_iface_destruct(ovpn, true);
 	rtnl_unlock();
 
 	/* we set the user_ptr to NULL to prevent post_doit from releasing it again */

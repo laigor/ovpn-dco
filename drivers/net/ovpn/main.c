@@ -194,7 +194,6 @@ int ovpn_iface_create(const char *name, enum ovpn_mode mode, struct net *net)
 		rtnl_unlock();
 		goto err;
 	}
-	list_add(&ovpn->dev_list, &dev_list);
 	printk("UNLOCKING!\n");
 	rtnl_unlock();
 
@@ -205,14 +204,70 @@ err:
 	return ret;
 }
 
-void ovpn_iface_destruct(struct ovpn_struct *ovpn)
+void ovpn_iface_destruct(struct ovpn_struct *ovpn, bool unregister_netdev)
 {
 	ASSERT_RTNL();
 
 	dev_put(ovpn->dev);
 	list_del(&ovpn->dev_list);
-	unregister_netdevice(ovpn->dev);
+	ovpn->registered = false;
+	if (unregister_netdev)
+		unregister_netdevice(ovpn->dev);
 }
+
+static int ovpn_netdev_notifier_call(struct notifier_block *nb,
+				     unsigned long state, void *ptr)
+{
+	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
+	struct ovpn_struct *ovpn;
+
+	if (!ovpn_dev_is_valid(dev))
+		return NOTIFY_DONE;
+
+	ovpn = netdev_priv(dev);
+
+	switch (state) {
+	case NETDEV_POST_INIT:
+		printk("==> POST_INIT! %s\n", dev->name);
+		break;
+	case NETDEV_REGISTER:
+		printk("==> REGISTER! %s\n", dev->name);
+		list_add(&ovpn->dev_list, &dev_list);
+		ovpn->registered = true;
+		break;
+	case NETDEV_UNREGISTER:
+		printk("==> UNREGISTER! %s\n", dev->name);
+		/* can be deleivered multiple times, so check registered flag */
+		if (!ovpn->registered)
+			return NOTIFY_DONE;
+
+		ovpn_iface_destruct(ovpn, false);
+		break;
+	case NETDEV_GOING_DOWN:
+		printk("==> GOING DOWN! %s\n", dev->name);
+		/* cancel work */
+		break;
+	case NETDEV_DOWN:
+		printk("==> DOWN! %s\n", dev->name);
+		break;
+	case NETDEV_UP:
+		printk("==> UP! %s\n", dev->name);
+		break;
+	case NETDEV_PRE_UP:
+		printk("==> PRE_UP %s\n", dev->name);
+			//return notifier_from_errno(-EOPNOTSUPP);
+		break;
+	default:
+		printk("==> UNKNOWN: %lu %s\n", state, dev->name);
+		return NOTIFY_DONE;
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block ovpn_netdev_notifier = {
+	.notifier_call = ovpn_netdev_notifier_call,
+};
 
 /*static void ovpn_ns_pre_exit(struct net *net)
 {
@@ -252,22 +307,30 @@ static int __init ovpn_init(void)
 		return err;
 	}
 
+	err = register_netdevice_notifier(&ovpn_netdev_notifier);
+	if (err) {
+		pr_err("ovpn: can't register netdevice notifier: %d\n", err);
+		goto unreg_nl;
+	}
+
 /*	err = register_pernet_device(&pernet_ops);
 	if (err) {
 		pr_err("ovpn: can't register pernet ops: %d\n", err);
 		goto unreg_nl;
 	}
+	*/
 
 	return 0;
 
 unreg_nl:
-	ovpn_nl_unregister();*/
+	ovpn_nl_unregister();
 	return err;
 }
 
 static __exit void ovpn_cleanup(void)
 {
 //	unregister_pernet_device(&pernet_ops);
+	unregister_netdevice_notifier(&ovpn_netdev_notifier);
 	ovpn_nl_unregister();
 	rcu_barrier(); /* because we use call_rcu */
 }
