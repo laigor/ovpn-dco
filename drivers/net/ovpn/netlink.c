@@ -153,8 +153,10 @@ static void ovpn_post_doit(const struct genl_split_ops *ops, struct sk_buff *skb
 
 	ovpn = info->user_ptr[0];
 	/* in case of OVPN_CMD_NEW_IFACE, there is no pre-stored device */
-	if (ovpn)
+	if (ovpn) {
+		printk("POST_DOIT: releasing dev\n");
 		dev_put(ovpn->dev);
+	}
 }
 
 static int ovpn_nl_get_key_dir(struct genl_info *info, struct nlattr *key,
@@ -824,6 +826,7 @@ static int ovpn_nl_del_iface(struct sk_buff *skb, struct genl_info *info)
 
 	rtnl_lock();
 	ovpn_iface_destruct(ovpn, true);
+	dev_put(ovpn->dev);
 	rtnl_unlock();
 
 	/* we set the user_ptr to NULL to prevent post_doit from releasing it again */

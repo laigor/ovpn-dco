@@ -43,15 +43,6 @@ static void ovpn_struct_free(struct net_device *net)
 
 	printk("CALLING DESTRUCTOR ON %s\n", net->name);
 
-	switch (ovpn->mode) {
-	case OVPN_MODE_P2P:
-		ovpn_peer_release_p2p(ovpn);
-		break;
-	default:
-		ovpn_peers_free(ovpn);
-		break;
-	}
-
 	security_tun_dev_free_security(ovpn->security);
 	free_percpu(net->tstats);
 	flush_workqueue(ovpn->crypto_wq);
@@ -65,6 +56,7 @@ static void ovpn_struct_free(struct net_device *net)
 static int ovpn_net_open(struct net_device *dev)
 {
 	struct in_device *dev_v4 = __in_dev_get_rtnl(dev);
+	printk("OPEN! %s\n", dev->name);
 
 	if (dev_v4) {
 		/* disable redirects as Linux gets confused by ovpn handling same-LAN routing */
@@ -79,6 +71,7 @@ static int ovpn_net_open(struct net_device *dev)
 /* Net device stop -- called prior to device unload */
 static int ovpn_net_stop(struct net_device *dev)
 {
+	printk("STOP! %s\n", dev->name);
 	netif_tx_stop_all_queues(dev);
 	return 0;
 }
@@ -208,11 +201,26 @@ void ovpn_iface_destruct(struct ovpn_struct *ovpn, bool unregister_netdev)
 {
 	ASSERT_RTNL();
 
-	dev_put(ovpn->dev);
+	netif_carrier_off(ovpn->dev);
+
 	list_del(&ovpn->dev_list);
 	ovpn->registered = false;
+
+	switch (ovpn->mode) {
+	case OVPN_MODE_P2P:
+		ovpn_peer_release_p2p(ovpn);
+		break;
+	default:
+		ovpn_peers_free(ovpn);
+		break;
+	}
+
 	if (unregister_netdev)
 		unregister_netdevice(ovpn->dev);
+
+	synchronize_net();
+
+	printk("==> DESTRUCT! %s (refcnt=%u)\n", ovpn->dev->name, netdev_refcnt_read(ovpn->dev));
 }
 
 static int ovpn_netdev_notifier_call(struct notifier_block *nb,
@@ -236,7 +244,7 @@ static int ovpn_netdev_notifier_call(struct notifier_block *nb,
 		ovpn->registered = true;
 		break;
 	case NETDEV_UNREGISTER:
-		printk("==> UNREGISTER! %s\n", dev->name);
+		printk("==> UNREGISTER! %s (refcnt=%u)\n", dev->name, netdev_refcnt_read(dev));
 		/* can be deleivered multiple times, so check registered flag */
 		if (!ovpn->registered)
 			return NOTIFY_DONE;

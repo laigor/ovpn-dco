@@ -227,6 +227,7 @@ static void ovpn_peer_free(struct ovpn_peer *peer)
 
 	dst_cache_destroy(&peer->dst_cache);
 
+	printk("free peer %u and releasing device %s!\n", peer->id, peer->ovpn->dev->name);
 	dev_put(peer->ovpn->dev);
 
 	kfree(peer);

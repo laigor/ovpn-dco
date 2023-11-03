@@ -4,7 +4,7 @@
 #
 #  Author:	Antonio Quartulli <antonio@openvpn.net>
 
-#set -x
+set -x
 set -e
 
 UDP_PEERS_FILE=${UDP_PEERS_FILE:-udp_peers.txt}
@@ -33,9 +33,9 @@ function setup_ns() {
 		sleep 5
 	fi
 
-	ip netns exec peer$1 $OVPN_CLI tun0 new_iface
-	ip -n peer$1 addr add $2 dev tun0
-	ip -n peer$1 link set tun0 up
+	ip netns exec peer$1 $OVPN_CLI tun${1} new_iface
+	ip -n peer$1 addr add $2 dev tun${1}
+	ip -n peer$1 link set tun${1} up
 }
 
 function add_peer() {
@@ -48,8 +48,8 @@ function add_peer() {
 				ip netns exec peer0 $OVPN_CLI tun0 new_key ${p} $ALG 0 data64.key
 			done
 		else
-			ip netns exec peer${1} $OVPN_CLI tun0 new_peer 1 ${1} 10.10.${1}.1 1 5.5.5.1
-			ip netns exec peer${1} $OVPN_CLI tun0 new_key ${1} $ALG 1 data64.key
+			ip netns exec peer${1} $OVPN_CLI tun${1} new_peer 1 ${1} 10.10.${1}.1 1 5.5.5.1
+			ip netns exec peer${1} $OVPN_CLI tun${1} new_key ${1} $ALG 1 data64.key
 		fi
 	else
 		if [ $1 -eq 0 ]; then
@@ -72,7 +72,7 @@ for p in $(seq 1 10); do
 	ip -n peer0 link del veth${p} 2>/dev/null || true
 done
 for p in $(seq 0 10); do
-	ip netns exec peer${p} $OVPN_CLI tun0 del_iface 2>/dev/null || true
+	ip netns exec peer${p} $OVPN_CLI tun${p} del_iface 2>/dev/null || true
 	ip netns del peer${p} 2>/dev/null || true
 done
 
