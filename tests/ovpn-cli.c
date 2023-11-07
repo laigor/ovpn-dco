@@ -57,6 +57,8 @@ struct nl_ctx {
 };
 
 struct ovpn_ctx {
+	enum ovpn_mode mode;
+
 	__u8 key_enc[KEY_LEN];
 	__u8 key_dec[KEY_LEN];
 	__u8 nonce[NONCE_LEN];
@@ -1193,9 +1195,13 @@ static void usage(const char *cmd)
 {
 	fprintf(stderr, "Error: invalid arguments.\n\n");
 	fprintf(stderr,
-		"Usage %s <iface> <connect|listen|new_peer|new_multi_peer|set_peer|del_peer|new_key|del_key|recv|send|listen_mcast> [arguments..]\n",
+		"Usage %s <iface> <new_iface|del_iface|connect|listen|new_peer|new_multi_peer|set_peer|del_peer|new_key|del_key|recv|send|listen_mcast> [arguments..]\n",
 		cmd);
 	fprintf(stderr, "\tiface: tun interface name\n\n");
+
+	fprintf(stderr, "* new_iface <mode>\n\n");
+
+	fprintf(stderr, "\tmode: operating mode among P2P or MP (multipeer)\n\n");
 
 	fprintf(stderr, "* connect <peer_id> <raddr> <rport> <vpnaddr>: start connecting peer of TCP-based VPN session\n");
 	fprintf(stderr, "\tpeer-id: peer ID of the connecting peer\n");
@@ -1253,6 +1259,21 @@ static void usage(const char *cmd)
 
 	fprintf(stderr, "* listen_mcast: listen to ovpn-dco netlink multicast messages\n");
 }
+
+static int ovpn_parse_new_iface(struct ovpn_ctx *ovpn, const char *mode)
+{
+	if (!strcmp(mode, "P2P")) {
+		ovpn->mode = OVPN_MODE_P2P;
+	} else if (!strcmp(mode, "MP")) {
+		ovpn->mode = OVPN_MODE_MP;
+	} else {
+		fprintf(stderr, "invalid iface mode: %s\n", mode);
+		return -1;
+	}
+
+	return 0;
+}
+
 
 static int ovpn_parse_remote(struct ovpn_ctx *ovpn, const char *host, const char *service,
 			     const char *vpn_addr)
@@ -1340,6 +1361,7 @@ static int ovpn_new_iface(struct ovpn_ctx *ovpn)
 		return -ENOMEM;
 
 	NLA_PUT(ctx->nl_msg, OVPN_A_IFNAME, strlen(ovpn->ifname) + 1, ovpn->ifname);
+	NLA_PUT_U8(ctx->nl_msg, OVPN_A_MODE, ovpn->mode);
 
 	ret = ovpn_nl_msg_send(ctx, NULL);
 nla_put_failure:
@@ -1386,6 +1408,17 @@ int main(int argc, char *argv[])
 	}
 
 	if (!strcmp(argv[2], "new_iface")) {
+		const char *mode = "P2P";
+		if (argc > 3) {
+			mode = argv[3];
+		}
+
+		ret = ovpn_parse_new_iface(&ovpn, mode);
+		if (ret < 0) {
+			fprintf(stderr, "cannot parse new_iface arguments\n");
+			return -1;
+		}
+
 		ret = ovpn_new_iface(&ovpn);
 		if (ret < 0) {
 			fprintf(stderr, "cannot add iface %s: %s\n", ovpn.ifname,
