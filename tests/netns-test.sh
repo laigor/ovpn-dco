@@ -17,7 +17,10 @@ function create_ns() {
 }
 
 function setup_ns() {
+	MODE="P2P"
+
 	if [ $1 -eq 0 ]; then
+		MODE="MP"
 		for p in $(seq 1 $NUM_PEERS); do
 			ip link add veth${p} netns peer0 type veth peer name veth${p} netns peer${p}
 
@@ -33,7 +36,7 @@ function setup_ns() {
 		sleep 5
 	fi
 
-	ip netns exec peer$1 $OVPN_CLI tun${1} new_iface
+	ip netns exec peer$1 $OVPN_CLI tun${1} new_iface $MODE
 	ip -n peer$1 addr add $2 dev tun${1}
 	ip -n peer$1 link set tun${1} up
 }
