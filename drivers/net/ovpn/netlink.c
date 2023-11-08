@@ -213,6 +213,8 @@ static int ovpn_nl_set_key(struct sk_buff *skb, struct genl_info *info)
 
 	ret = nla_parse_nested(p_attrs, NUM_OVPN_A_PEER - 1, info->attrs[OVPN_A_PEER],
 			       NULL, info->extack);
+	if (ret)
+		return ret;
 
 	if (!p_attrs[OVPN_A_PEER_ID] || !p_attrs[OVPN_A_PEER_KEYCONF])
 		return -EINVAL;
