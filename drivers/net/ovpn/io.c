@@ -184,8 +184,8 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	key_id = ovpn_key_id_from_skb(skb);
 	ks = ovpn_crypto_key_id_to_slot(&peer->crypto, key_id);
 	if (unlikely(!ks)) {
-		net_info_ratelimited("%s: no available key for peer %u, key-id: %u\n", __func__,
-				    peer->id, key_id);
+		net_info_ratelimited("%s: no available key for peer %u, key-id: %u\n",
+				     peer->ovpn->dev->name, peer->id, key_id);
 		goto drop;
 	}
 
@@ -196,7 +196,7 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 
 	if (unlikely(ret < 0)) {
 		net_err_ratelimited("%s: error during decryption for peer %u, key-id %u: %d\n",
-				   __func__, peer->id, key_id, ret);
+				    peer->ovpn->dev->name, peer->id, key_id, ret);
 		goto drop;
 	}
 
@@ -290,13 +290,14 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	ks = ovpn_crypto_key_slot_primary(&peer->crypto);
 	if (unlikely(!ks)) {
 		net_warn_ratelimited("%s: error while retrieving primary key slot for peer %u\n",
-				     __func__, peer->id);
+				     peer->ovpn->dev->name, peer->id);
 		return false;
 	}
 
 	if (unlikely(skb->ip_summed == CHECKSUM_PARTIAL &&
 		     skb_checksum_help(skb))) {
-		net_err_ratelimited("%s: cannot compute checksum for outgoing packet\n", __func__);
+		net_err_ratelimited("%s: cannot compute checksum for outgoing packet\n",
+				    peer->ovpn->dev->name);
 		goto err;
 	}
 
@@ -308,16 +309,18 @@ static bool ovpn_encrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 		/* if we ran out of IVs we must kill the key as it can't be used anymore */
 		if (ret == -ERANGE) {
 			netdev_warn(peer->ovpn->dev,
-				    "%s: killing primary key as we ran out of IVs\n", __func__);
+				    "killing primary key as we ran out of IVs for peer %u\n",
+				    peer->id);
 			ovpn_crypto_kill_primary(&peer->crypto);
 			ret = ovpn_nl_notify_swap_keys(peer);
 			if (ret < 0)
 				netdev_warn(peer->ovpn->dev,
-					    "couldn't send key killing notification to userspace for peer %u\n", peer->id);
+					    "couldn't send key killing notification to userspace for peer %u\n",
+					    peer->id);
 			goto err;
 		}
 		net_err_ratelimited("%s: error during encryption for peer %u, key-id %u: %d\n",
-				   __func__, peer->id, ks->key_id, ret);
+				    peer->ovpn->dev->name, peer->id, ks->key_id, ret);
 		goto err;
 	}
 
@@ -399,7 +402,7 @@ static void ovpn_queue_skb(struct ovpn_struct *ovpn, struct sk_buff *skb, struct
 
 	ret = ptr_ring_produce_bh(&peer->tx_ring, skb);
 	if (unlikely(ret < 0)) {
-		net_err_ratelimited("%s: cannot queue packet to TX ring\n", __func__);
+		net_err_ratelimited("%s: cannot queue packet to TX ring\n", peer->ovpn->dev->name);
 		goto drop;
 	}
 
