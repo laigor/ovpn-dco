@@ -164,7 +164,6 @@ int ovpn_recv(struct ovpn_struct *ovpn, struct ovpn_peer *peer, struct sk_buff *
 	if (unlikely(ptr_ring_produce_bh(&peer->rx_ring, skb) < 0))
 		return -ENOSPC;
 
-	netdev_dbg(peer->ovpn->dev, "queuing packet for decryption from peer %u\n", peer->id);
 	if (!queue_work(ovpn->crypto_wq, &peer->decrypt_work))
 		ovpn_peer_put(peer);
 
@@ -227,8 +226,7 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 
 		/* check if special OpenVPN message */
 		if (ovpn_is_keepalive(skb)) {
-			netdev_dbg(peer->ovpn->dev, "%s: ping received from peer with id %u\n",
-				   __func__, peer->id);
+			netdev_dbg(peer->ovpn->dev, "ping received from peero %u\n", peer->id);
 			/* not an error */
 			consume_skb(skb);
 			/* inform the caller that NAPI should not be scheduled
@@ -246,10 +244,10 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	skb->protocol = proto;
 
 	/* perform Reverse Path Filtering (RPF) */
-	allowed_peer = ovpn_rpf(peer->ovpn, skb);
+	allowed_peer = ovpn_peer_lookup_by_src(peer->ovpn, skb);
 	if (unlikely(allowed_peer != peer)) {
-		net_info_ratelimited("%s: packet drop due to RPF from peer %u (%p)\n",
-				     peer->ovpn->dev->name, peer->id, allowed_peer);
+		net_dbg_ratelimited("%s: RPF dropped packet from peer %u\n",
+				    peer->ovpn->dev->name, peer->id);
 		ret = -EPERM;
 		goto drop;
 	}
@@ -273,7 +271,6 @@ void ovpn_decrypt_work(struct work_struct *work)
 
 	peer = container_of(work, struct ovpn_peer, decrypt_work);
 	while ((skb = ptr_ring_consume_bh(&peer->rx_ring))) {
-		printk("%s: decrypting one\n", peer->ovpn->dev->name);
 		if (likely(ovpn_decrypt_one(peer, skb) == 0)) {
 			/* if a packet has been enqueued for NAPI, signal
 			 * availability to the networking stack
@@ -403,7 +400,7 @@ static void ovpn_queue_skb(struct ovpn_struct *ovpn, struct sk_buff *skb, struct
 	int ret;
 
 	if (likely(!peer))
-		peer = ovpn_peer_lookup_vpn_addr(ovpn, skb, false);
+		peer = ovpn_peer_lookup_by_dst(ovpn, skb);
 	if (unlikely(!peer)) {
 		net_dbg_ratelimited("%s: no peer to send data to\n", ovpn->dev->name);
 		goto drop;

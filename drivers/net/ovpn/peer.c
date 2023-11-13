@@ -227,7 +227,6 @@ static void ovpn_peer_free(struct ovpn_peer *peer)
 
 	dst_cache_destroy(&peer->dst_cache);
 
-	printk("free peer %u and releasing device %s!\n", peer->id, peer->ovpn->dev->name);
 	dev_put(peer->ovpn->dev);
 
 	kfree(peer);
@@ -304,7 +303,6 @@ static struct ovpn_peer *ovpn_peer_lookup_vpn_addr4(struct hlist_head *head, __b
 
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(tmp, head, hash_entry_addr4) {
-		pr_debug("checking IP: %pI4\n", &tmp->vpn_addrs.ipv4.s_addr);
 		if (*addr != tmp->vpn_addrs.ipv4.s_addr)
 			continue;
 
@@ -342,7 +340,7 @@ static struct ovpn_peer *ovpn_peer_lookup_vpn_addr6(struct hlist_head *head, str
 	return peer;
 }
 
-static __be32 ovpn_nexthop4(struct sk_buff *skb)
+static __be32 ovpn_nexthop_from_rt4(struct sk_buff *skb)
 {
 	struct rtable *rt = skb_rtable(skb);
 
@@ -364,36 +362,31 @@ static __be32 ovpn_nexthop4(struct sk_buff *skb)
  *
  * Return the IP of the next hop if found or the dst itself otherwise
  */
-static bool ovpn_rpf4(struct ovpn_struct *ovpn, __be32 src)
+static __be32 ovpn_nexthop_lookup4(struct ovpn_struct *ovpn, __be32 src)
 {
 	struct rtable *rt;
 	struct flowi4 fl = {
 		.daddr = src
 	};
 
-	netdev_dbg(ovpn->dev, "looking for %pI4\n", &src);
-
 	rt = ip_route_output_flow(dev_net(ovpn->dev), &fl, NULL);
 	if (IS_ERR(rt)) {
-		net_dbg_ratelimited("%s: no route to host %pI4\n", __func__, &src);
+		net_dbg_ratelimited("%s: no nexthop found for %pI4\n", ovpn->dev->name, &src);
 		/* if we end up here this packet is probably going to be
 		 * thrown away later
 		 */
 		return src;
 	}
 
-	netdev_dbg(ovpn->dev, "found entry, using gw=%u\n", rt->rt_uses_gateway);
-
 	if (!rt->rt_uses_gateway)
 		goto out;
 
 	src = rt->rt_gw4;
-	netdev_dbg(ovpn->dev, "GW is %pI4\n", &src);
 out:
 	return src;
 }
 
-static struct in6_addr ovpn_nexthop6(struct sk_buff *skb)
+static struct in6_addr ovpn_nexthop_from_rt6(struct sk_buff *skb)
 {
 	struct rt6_info *rt = (struct rt6_info *)skb_rtable(skb);
 
@@ -415,31 +408,31 @@ static struct in6_addr ovpn_nexthop6(struct sk_buff *skb)
  *
  * Return the IP of the next hop if found or the dst itself otherwise
  */
-static struct in6_addr ovpn_rpf6(struct ovpn_struct *ovpn, struct in6_addr src)
+static struct in6_addr ovpn_nexthop_lookup6(struct ovpn_struct *ovpn, struct in6_addr addr)
 {
 #if IS_ENABLED(CONFIG_IPV6)
 	struct rt6_info *rt;
 	struct flowi6 fl = {
-		.daddr = src,
+		.daddr = addr,
 	};
 
 	rt = (struct rt6_info *)ipv6_stub->ipv6_dst_lookup_flow(dev_net(ovpn->dev), NULL, &fl,
 								NULL);
 	if (IS_ERR(rt)) {
-		net_dbg_ratelimited("%s: no route to host %pI6\n", __func__, &src);
+		net_dbg_ratelimited("%s: no nexthop found for %pI6\n", ovpn->dev->name, &addr);
 		/* if we end up here this packet is probably going to be thrown away later */
-		return src;
+		return addr;
 	}
 
 	if (rt->rt6i_flags & RTF_GATEWAY)
-		src = rt->rt6i_gateway;
+		addr = rt->rt6i_gateway;
 
 	dst_release((struct dst_entry *)rt);
 #endif
-	return src;
+	return addr;
 }
 
-struct ovpn_peer *ovpn_rpf(struct ovpn_struct *ovpn, struct sk_buff *skb)
+struct ovpn_peer *ovpn_peer_lookup_by_src(struct ovpn_struct *ovpn, struct sk_buff *skb)
 {
 	struct ovpn_peer *tmp, *peer = NULL;
 	struct hlist_head *head;
@@ -464,16 +457,14 @@ struct ovpn_peer *ovpn_rpf(struct ovpn_struct *ovpn, struct sk_buff *skb)
 
 	switch (sa_fam) {
 	case AF_INET:
-		addr4 = ovpn_rpf4(ovpn, ip_hdr(skb)->saddr);
-		netdev_dbg(ovpn->dev, "ovpn_rpf4 returned %pI4 (src=%pI4)\n", &addr4,
-			   &ip_hdr(skb)->saddr);
+		addr4 = ovpn_nexthop_lookup4(ovpn, ip_hdr(skb)->saddr);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr4, sizeof(addr4));
 		head = &ovpn->peers.by_vpn_addr[index];
 
 		peer = ovpn_peer_lookup_vpn_addr4(head, &addr4);
 		break;
 	case AF_INET6:
-		addr6 = ovpn_rpf6(ovpn, ipv6_hdr(skb)->saddr);
+		addr6 = ovpn_nexthop_lookup6(ovpn, ipv6_hdr(skb)->saddr);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr6, sizeof(addr6));
 		head = &ovpn->peers.by_vpn_addr[index];
 
@@ -485,7 +476,7 @@ struct ovpn_peer *ovpn_rpf(struct ovpn_struct *ovpn, struct sk_buff *skb)
 }
 
 /**
- * ovpn_peer_lookup_vpn_addr() - Lookup peer to send skb to
+ * ovpn_peer_lookup_by_dst() - Lookup peer to send skb to
  *
  * This function takes a tunnel packet and looks up the peer to send it to
  * after encapsulation. The skb is expected to be the in-tunnel packet, without
@@ -498,8 +489,7 @@ struct ovpn_peer *ovpn_rpf(struct ovpn_struct *ovpn, struct sk_buff *skb)
  *
  * Return the peer if found or NULL otherwise.
  */
-struct ovpn_peer *ovpn_peer_lookup_vpn_addr(struct ovpn_struct *ovpn, struct sk_buff *skb,
-					    bool use_src)
+struct ovpn_peer *ovpn_peer_lookup_by_dst(struct ovpn_struct *ovpn, struct sk_buff *skb)
 {
 	struct ovpn_peer *tmp, *peer = NULL;
 	struct hlist_head *head;
@@ -524,14 +514,14 @@ struct ovpn_peer *ovpn_peer_lookup_vpn_addr(struct ovpn_struct *ovpn, struct sk_
 
 	switch (sa_fam) {
 	case AF_INET:
-		addr4 = ovpn_nexthop4(skb);
+		addr4 = ovpn_nexthop_from_rt4(skb);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr4, sizeof(addr4));
 		head = &ovpn->peers.by_vpn_addr[index];
 
 		peer = ovpn_peer_lookup_vpn_addr4(head, &addr4);
 		break;
 	case AF_INET6:
-		addr6 = ovpn_nexthop6(skb);
+		addr6 = ovpn_nexthop_from_rt6(skb);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr6, sizeof(addr6));
 		head = &ovpn->peers.by_vpn_addr[index];
 
@@ -820,7 +810,6 @@ static int ovpn_peer_add_p2p(struct ovpn_struct *ovpn, struct ovpn_peer *peer)
 	 */
 	tmp = rcu_dereference(ovpn->peer);
 	if (tmp) {
-		printk("ovpn_peer_add_p2p\n");
 		tmp->delete_reason = OVPN_DEL_PEER_REASON_TEARDOWN;
 		ovpn_peer_put(tmp);
 	}
@@ -907,7 +896,6 @@ void ovpn_peer_release_p2p(struct ovpn_struct *ovpn)
 	if (!tmp)
 		goto unlock;
 
-	printk("ovpn_peer_release_p2p\n");
 	ovpn_peer_del_p2p(tmp, OVPN_DEL_PEER_REASON_TEARDOWN);
 unlock:
 	rcu_read_unlock();
@@ -932,7 +920,6 @@ void ovpn_peers_free(struct ovpn_struct *ovpn)
 	int bkt;
 
 	dump_stack();
-	printk("RELEASING ALL PEERS\n");
 
 	spin_lock_bh(&ovpn->peers.lock);
 	hash_for_each_safe(ovpn->peers.by_id, bkt, tmp, peer, hash_entry_id)

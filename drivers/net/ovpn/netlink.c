@@ -121,13 +121,11 @@ static int ovpn_pre_doit(const struct genl_split_ops *ops, struct sk_buff *skb,
 	/* the OVPN_CMD_NEW_IFACE command is different from the rest as it
 	 * just expects an IFNAME, while all the others expect an IFINDEX
 	 */
-	printk("PRE DOIT\n");
 	if (info->genlhdr->cmd == OVPN_CMD_NEW_IFACE) {
 		if (!info->attrs[OVPN_A_IFNAME]) {
 			GENL_SET_ERR_MSG(info, "no interface name specified");
 			return -EINVAL;
 		}
-		printk("EXITING 0\n");
 		return 0;
 	}
 
@@ -153,10 +151,8 @@ static void ovpn_post_doit(const struct genl_split_ops *ops, struct sk_buff *skb
 
 	ovpn = info->user_ptr[0];
 	/* in case of OVPN_CMD_NEW_IFACE, there is no pre-stored device */
-	if (ovpn) {
-		printk("POST_DOIT: releasing dev\n");
+	if (ovpn)
 		dev_put(ovpn->dev);
-	}
 }
 
 static int ovpn_nl_get_key_dir(struct genl_info *info, struct nlattr *key,
@@ -801,8 +797,6 @@ static int ovpn_nl_new_iface(struct sk_buff *skb, struct genl_info *info)
 	struct net_device *dev;
 	char *ifname;
 	int ret;
-
-	printk("CALLING NEW_IFACE\n");
 
 	if (!info->attrs[OVPN_A_IFNAME])
 		return -EINVAL;

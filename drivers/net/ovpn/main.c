@@ -41,8 +41,6 @@ static void ovpn_struct_free(struct net_device *net)
 {
 	struct ovpn_struct *ovpn = netdev_priv(net);
 
-	printk("CALLING DESTRUCTOR ON %s\n", net->name);
-
 	security_tun_dev_free_security(ovpn->security);
 	free_percpu(net->tstats);
 	flush_workqueue(ovpn->crypto_wq);
@@ -56,7 +54,6 @@ static void ovpn_struct_free(struct net_device *net)
 static int ovpn_net_open(struct net_device *dev)
 {
 	struct in_device *dev_v4 = __in_dev_get_rtnl(dev);
-	printk("OPEN! %s\n", dev->name);
 
 	if (dev_v4) {
 		/* disable redirects as Linux gets confused by ovpn handling same-LAN routing */
@@ -71,7 +68,6 @@ static int ovpn_net_open(struct net_device *dev)
 /* Net device stop -- called prior to device unload */
 static int ovpn_net_stop(struct net_device *dev)
 {
-	printk("STOP! %s\n", dev->name);
 	netif_tx_stop_all_queues(dev);
 	return 0;
 }
@@ -177,17 +173,14 @@ int ovpn_iface_create(const char *name, enum ovpn_mode mode, struct net *net)
 	ovpn = netdev_priv(dev);
 	ovpn->mode = mode;
 
-	printk("LOCKING\n");
 	rtnl_lock();
 
-	printk("REGISTERING!\n");
 	ret = register_netdevice(dev);
 	if (ret < 0) {
 		netdev_dbg(dev, "cannot register interface %s: %d\n", dev->name, ret);
 		rtnl_unlock();
 		goto err;
 	}
-	printk("UNLOCKING!\n");
 	rtnl_unlock();
 
 	return ret;
@@ -219,8 +212,6 @@ void ovpn_iface_destruct(struct ovpn_struct *ovpn, bool unregister_netdev)
 		unregister_netdevice(ovpn->dev);
 
 	synchronize_net();
-
-	printk("==> DESTRUCT! %s (refcnt=%u)\n", ovpn->dev->name, netdev_refcnt_read(ovpn->dev));
 }
 
 static int ovpn_netdev_notifier_call(struct notifier_block *nb,
@@ -236,15 +227,12 @@ static int ovpn_netdev_notifier_call(struct notifier_block *nb,
 
 	switch (state) {
 	case NETDEV_POST_INIT:
-		printk("==> POST_INIT! %s\n", dev->name);
 		break;
 	case NETDEV_REGISTER:
-		printk("==> REGISTER! %s\n", dev->name);
 		list_add(&ovpn->dev_list, &dev_list);
 		ovpn->registered = true;
 		break;
 	case NETDEV_UNREGISTER:
-		printk("==> UNREGISTER! %s (refcnt=%u)\n", dev->name, netdev_refcnt_read(dev));
 		/* can be deleivered multiple times, so check registered flag */
 		if (!ovpn->registered)
 			return NOTIFY_DONE;
@@ -252,21 +240,16 @@ static int ovpn_netdev_notifier_call(struct notifier_block *nb,
 		ovpn_iface_destruct(ovpn, false);
 		break;
 	case NETDEV_GOING_DOWN:
-		printk("==> GOING DOWN! %s\n", dev->name);
 		/* cancel work */
 		break;
 	case NETDEV_DOWN:
-		printk("==> DOWN! %s\n", dev->name);
 		break;
 	case NETDEV_UP:
-		printk("==> UP! %s\n", dev->name);
 		break;
 	case NETDEV_PRE_UP:
-		printk("==> PRE_UP %s\n", dev->name);
 			//return notifier_from_errno(-EOPNOTSUPP);
 		break;
 	default:
-		printk("==> UNKNOWN: %lu %s\n", state, dev->name);
 		return NOTIFY_DONE;
 	}
 
