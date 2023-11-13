@@ -246,7 +246,7 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	skb->protocol = proto;
 
 	/* perform Reverse Path Filtering (RPF) */
-	allowed_peer = ovpn_peer_lookup_vpn_addr(peer->ovpn, skb, true);
+	allowed_peer = ovpn_rpf(peer->ovpn, skb);
 	if (unlikely(allowed_peer != peer)) {
 		net_info_ratelimited("%s: packet drop due to RPF from peer %u (%p)\n",
 				     peer->ovpn->dev->name, peer->id, allowed_peer);

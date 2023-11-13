@@ -434,6 +434,49 @@ static struct in6_addr ovpn_rpf6(struct ovpn_struct *ovpn, struct in6_addr src)
 	return src;
 }
 
+struct ovpn_peer *ovpn_rpf(struct ovpn_struct *ovpn, struct sk_buff *skb)
+{
+	struct ovpn_peer *tmp, *peer = NULL;
+	struct hlist_head *head;
+	sa_family_t sa_fam;
+	struct in6_addr addr6;
+	__be32 addr4;
+	u32 index;
+
+	/* in P2P mode, no matter the destination, packets are always sent to the single peer
+	 * listening on the other side
+	 */
+	if (ovpn->mode == OVPN_MODE_P2P) {
+		rcu_read_lock();
+		tmp = rcu_dereference(ovpn->peer);
+		if (likely(tmp && ovpn_peer_hold(tmp)))
+			peer = tmp;
+		rcu_read_unlock();
+		return peer;
+	}
+
+	sa_fam = skb_protocol_to_family(skb);
+
+	switch (sa_fam) {
+	case AF_INET:
+		addr4 = ovpn_rpf4(ovpn, ip_hdr(skb)->saddr);
+		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr4, sizeof(addr4));
+		head = &ovpn->peers.by_vpn_addr[index];
+
+		peer = ovpn_peer_lookup_vpn_addr4(head, &addr4);
+		break;
+	case AF_INET6:
+		addr6 = ovpn_rpf6(ovpn, ipv6_hdr(skb)->saddr);
+		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr6, sizeof(addr6));
+		head = &ovpn->peers.by_vpn_addr[index];
+
+		peer = ovpn_peer_lookup_vpn_addr6(head, &addr6);
+		break;
+	}
+
+	return peer;
+}
+
 /**
  * ovpn_peer_lookup_vpn_addr() - Lookup peer to send skb to
  *
@@ -474,7 +517,6 @@ struct ovpn_peer *ovpn_peer_lookup_vpn_addr(struct ovpn_struct *ovpn, struct sk_
 
 	switch (sa_fam) {
 	case AF_INET:
-		netdev_dbg(ovpn->dev, "checking IPv4\n");
 		addr4 = ovpn_nexthop4(skb);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr4, sizeof(addr4));
 		head = &ovpn->peers.by_vpn_addr[index];

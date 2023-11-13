@@ -165,6 +165,8 @@ struct ovpn_peer *ovpn_peer_lookup_vpn_addr(struct ovpn_struct *ovpn, struct sk_
 					    bool use_src);
 struct ovpn_peer *ovpn_peer_lookup_id(struct ovpn_struct *ovpn, u32 peer_id);
 
+struct ovpn_peer *ovpn_rpf(struct ovpn_struct *ovpn, struct sk_buff *skb);
+
 void ovpn_peer_update_local_endpoint(struct ovpn_peer *peer, struct sk_buff *skb);
 void ovpn_peer_float(struct ovpn_peer *peer, struct sk_buff *skb);
 
