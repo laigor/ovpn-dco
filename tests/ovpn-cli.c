@@ -846,7 +846,7 @@ static int ovpn_new_key(struct ovpn_ctx *ovpn)
 	nla_nest_end(ctx->nl_msg, keydir);
 
 	keydir = nla_nest_start(ctx->nl_msg, OVPN_A_KEYCONF_DECRYPT_DIR);
-	NLA_PUT(ctx->nl_msg, OVPN_A_KEYDIR_CIPHER_KEY, KEY_LEN, ovpn->key_enc);
+	NLA_PUT(ctx->nl_msg, OVPN_A_KEYDIR_CIPHER_KEY, KEY_LEN, ovpn->key_dec);
 	NLA_PUT(ctx->nl_msg, OVPN_A_KEYDIR_NONCE_TAIL, NONCE_LEN, ovpn->nonce);
 	nla_nest_end(ctx->nl_msg, keydir);
 
