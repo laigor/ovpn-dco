@@ -164,6 +164,7 @@ int ovpn_recv(struct ovpn_struct *ovpn, struct ovpn_peer *peer, struct sk_buff *
 	if (unlikely(ptr_ring_produce_bh(&peer->rx_ring, skb) < 0))
 		return -ENOSPC;
 
+	netdev_dbg(peer->ovpn->dev, "queuing packet for decryption from peer %u\n", peer->id);
 	if (!queue_work(ovpn->crypto_wq, &peer->decrypt_work))
 		ovpn_peer_put(peer);
 
@@ -218,6 +219,8 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	if (unlikely(!proto)) {
 		/* check if null packet */
 		if (unlikely(!pskb_may_pull(skb, 1))) {
+			netdev_dbg(peer->ovpn->dev, "NULL packet received from peer %u\n",
+				   peer->id);
 			ret = -EINVAL;
 			goto drop;
 		}
@@ -234,6 +237,9 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 			return -1;
 		}
 
+		netdev_dbg(peer->ovpn->dev, "unsupported protocol received from peer %u\n",
+			   peer->id);
+
 		ret = -EPROTONOSUPPORT;
 		goto drop;
 	}
@@ -242,6 +248,8 @@ static int ovpn_decrypt_one(struct ovpn_peer *peer, struct sk_buff *skb)
 	/* perform Reverse Path Filtering (RPF) */
 	allowed_peer = ovpn_peer_lookup_vpn_addr(peer->ovpn, skb, true);
 	if (unlikely(allowed_peer != peer)) {
+		net_info_ratelimited("%s: packet drop due to RPF from peer %u (%p)\n",
+				     peer->ovpn->dev->name, peer->id, allowed_peer);
 		ret = -EPERM;
 		goto drop;
 	}
@@ -265,6 +273,7 @@ void ovpn_decrypt_work(struct work_struct *work)
 
 	peer = container_of(work, struct ovpn_peer, decrypt_work);
 	while ((skb = ptr_ring_consume_bh(&peer->rx_ring))) {
+		printk("%s: decrypting one\n", peer->ovpn->dev->name);
 		if (likely(ovpn_decrypt_one(peer, skb) == 0)) {
 			/* if a packet has been enqueued for NAPI, signal
 			 * availability to the networking stack

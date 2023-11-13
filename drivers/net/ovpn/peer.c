@@ -304,6 +304,7 @@ static struct ovpn_peer *ovpn_peer_lookup_vpn_addr4(struct hlist_head *head, __b
 
 	rcu_read_lock();
 	hlist_for_each_entry_rcu(tmp, head, hash_entry_addr4) {
+		pr_debug("checking IP: %pI4\n", &tmp->vpn_addrs.ipv4.s_addr);
 		if (*addr != tmp->vpn_addrs.ipv4.s_addr)
 			continue;
 
@@ -473,6 +474,7 @@ struct ovpn_peer *ovpn_peer_lookup_vpn_addr(struct ovpn_struct *ovpn, struct sk_
 
 	switch (sa_fam) {
 	case AF_INET:
+		netdev_dbg(ovpn->dev, "checking IPv4\n");
 		addr4 = ovpn_nexthop4(skb);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr4, sizeof(addr4));
 		head = &ovpn->peers.by_vpn_addr[index];
