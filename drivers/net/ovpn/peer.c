@@ -371,6 +371,8 @@ static bool ovpn_rpf4(struct ovpn_struct *ovpn, __be32 src)
 		.daddr = src
 	};
 
+	netdev_dbg(ovpn->dev, "looking for %pI4\n", &src);
+
 	rt = ip_route_output_flow(dev_net(ovpn->dev), &fl, NULL);
 	if (IS_ERR(rt)) {
 		net_dbg_ratelimited("%s: no route to host %pI4\n", __func__, &src);
@@ -380,10 +382,13 @@ static bool ovpn_rpf4(struct ovpn_struct *ovpn, __be32 src)
 		return src;
 	}
 
+	netdev_dbg(ovpn->dev, "found entry, using gw=%u\n", rt->rt_uses_gateway);
+
 	if (!rt->rt_uses_gateway)
 		goto out;
 
 	src = rt->rt_gw4;
+	netdev_dbg(ovpn->dev, "GW is %pI4\n", &src);
 out:
 	return src;
 }
@@ -460,6 +465,8 @@ struct ovpn_peer *ovpn_rpf(struct ovpn_struct *ovpn, struct sk_buff *skb)
 	switch (sa_fam) {
 	case AF_INET:
 		addr4 = ovpn_rpf4(ovpn, ip_hdr(skb)->saddr);
+		netdev_dbg(ovpn->dev, "ovpn_rpf4 returned %pI4 (src=%pI4)\n", &addr4,
+			   &ip_hdr(skb)->saddr);
 		index = ovpn_peer_index(ovpn->peers.by_vpn_addr, &addr4, sizeof(addr4));
 		head = &ovpn->peers.by_vpn_addr[index];
 
